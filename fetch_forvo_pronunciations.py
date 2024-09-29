@@ -48,7 +48,7 @@ def load_cache():
     if not os.path.exists(CACHE_FILE):
         # Initialize cache structure
         cache = {
-            'pronunciations': {},  # word: [list of URLs]
+            'pronunciations': {},  # word: [list of filenames]
             'request_count': 0,  # Number of API requests made today
             'last_reset': datetime.today().strftime('%Y-%m-%d')  # Last reset date
         }
@@ -89,7 +89,7 @@ def get_deck_cards(deck_name):
     return card_ids
 
 
-# Step 2: Get notes by card IDs (Corrected Function)
+# Step 2: Get notes by card IDs
 def get_notes(card_ids):
     # First, get card information to retrieve note IDs
     params = {
@@ -122,8 +122,8 @@ def get_notes(card_ids):
     return response.get('result', [])
 
 
-# Step 3: Fetch pronunciation URLs from Forvo
-def fetch_forvo_pronunciations(word):
+# Step 3: Fetch pronunciation URLs from Forvo and store them locally
+def fetch_and_store_pronunciations(word):
     # Encode the word for URL
     encoded_word = requests.utils.quote(word)
     url = f'https://apifree.forvo.com/key/{FORVO_API_KEY}/format/json/action/word-pronunciations/word/{encoded_word}/language/{FORVO_LANGUAGE}'
@@ -135,7 +135,7 @@ def fetch_forvo_pronunciations(word):
             return []
 
         data = response.json()
-        pronunciations = []
+        filenames = []
 
         if 'items' in data:
             for item in data['items']:
@@ -145,20 +145,38 @@ def fetch_forvo_pronunciations(word):
                     if not mp3_path.startswith('/'):
                         mp3_path = '/' + mp3_path
                     mp3_url = f"https://apifree.forvo.com{mp3_path}"
-                    pronunciations.append(mp3_url)
 
-        return pronunciations
+                    # Generate a unique filename
+                    dialect = item.get('dialect', 'random').replace(' ', '_')  # Assuming 'dialect' field exists
+                    filename = f"{word}_{dialect}.mp3".replace('/', '_')  # Replace any '/' to avoid path issues
+
+                    # Store the media file in Anki
+                    store_params = {
+                        "filename": filename,
+                        "url": mp3_url
+                    }
+                    store_response = invoke('storeMediaFile', store_params)
+                    if 'error' in store_response and store_response['error']:
+                        print(f"Error storing media file '{filename}': {store_response['error']}")
+                        continue
+                    stored_filename = store_response.get('result')
+                    if stored_filename:
+                        filenames.append(f"[sound:{stored_filename}]")
+                        print(f"Stored media file '{stored_filename}'.")
+                    else:
+                        print(f"Failed to store media file for '{word}'.")
+
+        return filenames
     except Exception as e:
-        print(f"Exception occurred while fetching Forvo data for '{word}': {e}")
+        print(f"Exception occurred while fetching/storing Forvo data for '{word}': {e}")
         return []
 
 
-# Step 4: Update Anki cards with Forvo pronunciations using updateNoteFields
+# Step 4: Update Anki notes with Forvo pronunciations using updateNoteFields
 def update_anki_notes(notes, field_name, pronunciations_dict):
     if not notes:
         return
 
-    notes_to_update = []
     for note in notes:
         word = note['fields'].get('Word', {}).get('value', '').strip()
         if not word:
@@ -166,40 +184,26 @@ def update_anki_notes(notes, field_name, pronunciations_dict):
 
         pronunciations = pronunciations_dict.get(word, [])
         if pronunciations:
-            # Create HTML audio players for each pronunciation
-            audio_html = ''.join([f'<audio controls src="{url}"></audio><br>' for url in pronunciations])
+            # Join all [sound:...] tags with line breaks
+            sounds = '<br>'.join(pronunciations)
 
             # Prepare the note object for updateNoteFields
             note_update = {
                 "id": note['noteId'],  # Ensure 'id' is correct
                 "fields": {
-                    field_name: audio_html
+                    field_name: sounds
                 }
             }
-            notes_to_update.append(note_update)
 
-    if not notes_to_update:
-        print("No new pronunciations to update.")
-        return
-
-    # Send update to Anki
-    params = {
-        "note": None  # Placeholder
-    }
-
-    # Prepare a list of update requests
-    for note_update in notes_to_update:
-        params = {
-            "note": {
-                "id": note_update["id"],
-                "fields": note_update["fields"]
+            # Invoke updateNoteFields for each note
+            params = {
+                "note": note_update
             }
-        }
-        response = invoke('updateNoteFields', params)
-        if 'error' in response and response['error']:
-            print(f"Error updating note ID {note_update['id']}: {response['error']}")
-        else:
-            print(f"Successfully updated note ID {note_update['id']} with Forvo pronunciations.")
+            response = invoke('updateNoteFields', params)
+            if 'error' in response and response['error']:
+                print(f"Error updating note ID {note['noteId']}: {response['error']}")
+            else:
+                print(f"Successfully updated note ID {note['noteId']} with Forvo pronunciations.")
 
 
 def main():
@@ -221,7 +225,6 @@ def main():
 
     # Prepare to update notes
     pronunciations_dict = {}
-    notes_to_update = []
 
     for note in notes:
         word = note['fields'].get('Word', {}).get('value', '').strip()
@@ -240,8 +243,8 @@ def main():
             print(f"Daily request limit of {DAILY_REQUEST_LIMIT} reached. Stopping.")
             break
 
-        print(f"Fetching pronunciations for word: '{word}'")
-        pronunciations = fetch_forvo_pronunciations(word)
+        print(f"Fetching and storing pronunciations for word: '{word}'")
+        pronunciations = fetch_and_store_pronunciations(word)
 
         # Update cache
         cache['pronunciations'][word] = pronunciations
@@ -251,19 +254,11 @@ def main():
         # Increment request count if an API request was made
         cache['request_count'] += 1
 
-        # Prepare the updated note
-        notes_to_update.append({
-            "id": note['noteId'],  # Ensure 'id' is used
-            "fields": {
-                FIELD_NAME: ''.join([f'<audio controls src="{url}"></audio><br>' for url in pronunciations])
-            }
-        })
-
         # To respect API rate limits, sleep if necessary
         time.sleep(1)  # Adjust based on Forvo's rate limits
 
     # Step 4: Update Anki with new pronunciations using updateNoteFields
-    if notes_to_update:
+    if pronunciations_dict:
         update_anki_notes(notes, FIELD_NAME, pronunciations_dict)
     else:
         print("No new pronunciations to update.")
