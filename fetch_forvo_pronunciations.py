@@ -137,6 +137,7 @@ def fetch_and_store_pronunciations(word):
         filenames = []
 
         if 'items' in data:
+            mp3_index = 1
             for item in data['items']:
                 if item.get('pathmp3'):
                     mp3_url = item['pathmp3']
@@ -150,7 +151,8 @@ def fetch_and_store_pronunciations(word):
 
                     # Generate a unique filename
                     dialect = item.get('dialect', 'random').replace(' ', '_')  # Assuming 'dialect' field exists
-                    filename = f"{word}_{dialect}.mp3".replace('/', '_')  # Replace any '/' to avoid path issues
+                    filename = f"{word}_{dialect}_{mp3_index}.mp3".replace('/', '_')  # Replace any '/' to avoid path issues
+                    mp3_index += 1
 
                     # Store the media file in Anki
                     store_params = {
