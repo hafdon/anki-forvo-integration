@@ -122,7 +122,6 @@ def get_notes(card_ids):
     return response.get('result', [])
 
 
-# Step 3: Fetch pronunciation URLs from Forvo and store them locally
 def fetch_and_store_pronunciations(word):
     # Encode the word for URL
     encoded_word = requests.utils.quote(word)
@@ -140,11 +139,14 @@ def fetch_and_store_pronunciations(word):
         if 'items' in data:
             for item in data['items']:
                 if item.get('pathmp3'):
-                    # Construct the full URL if necessary
-                    mp3_path = item['pathmp3']
-                    if not mp3_path.startswith('/'):
-                        mp3_path = '/' + mp3_path
-                    mp3_url = f"https://apifree.forvo.com{mp3_path}"
+                    mp3_url = item['pathmp3']
+
+                    # Check if mp3_url is already a full URL
+                    if not mp3_url.startswith('http'):
+                        # If it's a relative path, prepend the base URL
+                        if not mp3_url.startswith('/'):
+                            mp3_url = '/' + mp3_url
+                        mp3_url = f"https://apifree.forvo.com{mp3_url}"
 
                     # Generate a unique filename
                     dialect = item.get('dialect', 'random').replace(' ', '_')  # Assuming 'dialect' field exists
