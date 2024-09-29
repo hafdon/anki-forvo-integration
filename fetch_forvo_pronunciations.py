@@ -26,22 +26,21 @@ CACHE_FILE = os.getenv('CACHE_FILE')  # File to store cached data
 # DAILY_REQUEST_LIMIT = os.getenv('DAILY_REQUEST_LIMIT')
 DAILY_REQUEST_LIMIT = 500     # Adjust based on Forvo's rate limits
 
-# # Setup logging
-# logging.basicConfig(
-#     filename='fetch_forvo_pronunciations.log',
-#     level=logging.INFO,
-#     format='%(asctime)s - %(levelname)s - %(message)s'
-# )
-
-
 
 # Function to make requests to AnkiConnect
 def invoke(action, params=None):
-    return requests.post(ANKI_CONNECT_URL, json={
-        'action': action,
-        'version': 6,
-        'params': params
-    }).json()
+    try:
+        response = requests.post(ANKI_CONNECT_URL, json={
+            'action': action,
+            'version': 6,
+            'params': params
+        })
+        response.raise_for_status()
+        result = response.json()
+        return result
+    except requests.exceptions.RequestException as e:
+        print(f"HTTP Request failed: {e}")
+        return {"error": str(e)}
 
 
 # Load cache from file
@@ -88,33 +87,9 @@ def get_deck_cards(deck_name):
     card_ids = response.get('result', [])
     print(f"Found {len(card_ids)} cards in deck '{deck_name}'.")
     return card_ids
-#
-# # Replace print statements with logging
-# def get_deck_cards(deck_name):
-#     query = f'deck:"{deck_name}"'
-#     params = {
-#         'query': query
-#     }
-#     response = invoke('findCards', params)
-#     if 'error' in response and response['error']:
-#         logging.error(f"Error finding cards: {response['error']}")
-#         return []
-#     card_ids = response.get('result', [])
-#     logging.info(f"Found {len(card_ids)} cards in deck '{deck_name}'.")
-#     return card_ids
 
 
-# # Step 2: Get notes by card IDs
-# def get_notes(card_ids):
-#     params = {
-#         'cards': card_ids
-#     }
-#     response = invoke('notesInfo', params)
-#     if 'error' in response and response['error']:
-#         print(f"Error retrieving notes: {response['error']}")
-#         return []
-#     return response.get('result', [])
-
+# Step 2: Get notes by card IDs (Corrected Function)
 def get_notes(card_ids):
     # First, get card information to retrieve note IDs
     params = {
@@ -166,9 +141,10 @@ def fetch_forvo_pronunciations(word):
             for item in data['items']:
                 if item.get('pathmp3'):
                     # Construct the full URL if necessary
-                    mp3_url = item['pathmp3']
-                    if not mp3_url.startswith('http'):
-                        mp3_url = f"https://apifree.forvo.com{mp3_url}"
+                    mp3_path = item['pathmp3']
+                    if not mp3_path.startswith('/'):
+                        mp3_path = '/' + mp3_path
+                    mp3_url = f"https://apifree.forvo.com{mp3_path}"
                     pronunciations.append(mp3_url)
 
         return pronunciations
@@ -177,36 +153,12 @@ def fetch_forvo_pronunciations(word):
         return []
 
 
-# Step 4: Update Anki cards with Forvo pronunciations
+# Step 4: Update Anki cards with Forvo pronunciations using updateNoteFields
 def update_anki_notes(notes, field_name, pronunciations_dict):
-    for note in notes:
-        word = note['fields'].get('Word', {}).get('value', '').strip()
-        if not word:
-            continue  # Skip if no word found
-
-        pronunciations = pronunciations_dict.get(word, [])
-        if pronunciations:
-            # Create HTML audio players for each pronunciation
-            audio_html = ''.join([f'<audio controls src="{url}"></audio><br>' for url in pronunciations])
-            # Update the field
-            note['fields'][field_name] = audio_html
-        else:
-            # If no pronunciations found, you can choose to clear the field or leave it as is
-            # Here, we'll leave it unchanged
-            pass
-
     if not notes:
         return
 
-    # Send update to Anki
-    response = invoke('updateNotes', {'notes': notes})
-    if 'error' in response and response['error']:
-        print(f"Error updating notes: {response['error']}")
-    else:
-        print(f"Successfully updated {len(notes)} notes with Forvo pronunciations.")
-
-
-def update_anki_notes_individually(notes, field_name, pronunciations_dict):
+    notes_to_update = []
     for note in notes:
         word = note['fields'].get('Word', {}).get('value', '').strip()
         if not word:
@@ -217,24 +169,37 @@ def update_anki_notes_individually(notes, field_name, pronunciations_dict):
             # Create HTML audio players for each pronunciation
             audio_html = ''.join([f'<audio controls src="{url}"></audio><br>' for url in pronunciations])
 
-            # Prepare parameters for setNoteFields
-            params = {
-                'note': note['id'],
-                'fields': {
+            # Prepare the note object for updateNoteFields
+            note_update = {
+                "id": note['noteId'],  # Ensure 'id' is correct
+                "fields": {
                     field_name: audio_html
                 }
             }
+            notes_to_update.append(note_update)
 
-            # Invoke setNoteFields
-            response = invoke('setNoteFields', params)
-            if 'error' in response and response['error']:
-                print(f"Error updating note ID {note['id']}: {response['error']}")
-            else:
-                print(f"Successfully updated note ID {note['id']} with Forvo pronunciations.")
+    if not notes_to_update:
+        print("No new pronunciations to update.")
+        return
 
+    # Send update to Anki
+    params = {
+        "note": None  # Placeholder
+    }
+
+    # Prepare a list of update requests
+    for note_update in notes_to_update:
+        params = {
+            "note": {
+                "id": note_update["id"],
+                "fields": note_update["fields"]
+            }
+        }
+        response = invoke('updateNoteFields', params)
+        if 'error' in response and response['error']:
+            print(f"Error updating note ID {note_update['id']}: {response['error']}")
         else:
-            # Optionally, handle notes without pronunciations
-            pass
+            print(f"Successfully updated note ID {note_update['id']} with Forvo pronunciations.")
 
 
 def main():
@@ -246,7 +211,6 @@ def main():
 
     # Step 1: Get all card IDs in the deck
     card_ids = get_deck_cards(DECK_NAME)
-    print(f"Found {len(card_ids)} cards in deck '{DECK_NAME}'.")
 
     if not card_ids:
         print("No cards found. Exiting.")
@@ -256,8 +220,8 @@ def main():
     notes = get_notes(card_ids)
 
     # Prepare to update notes
-    notes_to_update = []
     pronunciations_dict = {}
+    notes_to_update = []
 
     for note in notes:
         word = note['fields'].get('Word', {}).get('value', '').strip()
@@ -289,8 +253,8 @@ def main():
 
         # Prepare the updated note
         notes_to_update.append({
-            'id': note['noteId'],
-            'fields': {
+            "id": note['noteId'],  # Ensure 'id' is used
+            "fields": {
                 FIELD_NAME: ''.join([f'<audio controls src="{url}"></audio><br>' for url in pronunciations])
             }
         })
@@ -298,16 +262,9 @@ def main():
         # To respect API rate limits, sleep if necessary
         time.sleep(1)  # Adjust based on Forvo's rate limits
 
-    # Step 4: Update Anki with new pronunciations
-    # if notes_to_update:
-    #     update_anki_notes(notes_to_update, FIELD_NAME, pronunciations_dict)
-    # else:
-    #     print("No new pronunciations to update.")
-
-    # Step 4: Update Anki with new pronunciations
+    # Step 4: Update Anki with new pronunciations using updateNoteFields
     if notes_to_update:
-        print("Notes to update", notes_to_update)
-        update_anki_notes_individually(notes_to_update, FIELD_NAME, pronunciations_dict)
+        update_anki_notes(notes, FIELD_NAME, pronunciations_dict)
     else:
         print("No new pronunciations to update.")
 
