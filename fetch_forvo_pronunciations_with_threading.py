@@ -140,3 +140,27 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+###
+
+Additional Recommendations
+Thread Safety: If you choose the background thread approach, ensure that access to the cache object is thread-safe to prevent race conditions. In the above example, since the main thread is only writing to the cache and the saver thread is reading it, it should generally be safe. However, for more complex scenarios, consider using threading locks.
+
+Atomic Writes: To prevent data corruption (especially in the event of a crash during a write operation), you might want to write to a temporary file first and then rename it to cache.json. This ensures that cache.json is always in a valid state.
+
+python
+Copy code
+import os
+
+def save_cache_atomic(cache):
+    temp_file = CACHE_FILE + ".tmp"
+    with open(temp_file, "w", encoding="utf-8") as f:
+        json.dump(cache, f, ensure_ascii=False, indent=4)
+    os.replace(temp_file, CACHE_FILE)
+Replace save_cache(cache) with save_cache_atomic(cache) in the above examples.
+
+Logging: Instead of using print statements, consider using Python's logging module for more flexible and configurable logging.
+
+Configuration: Externalize configuration parameters (like CACHE_FILE, DECK_NAME, DAILY_REQUEST_LIMIT, FIELD_NAME, and save_interval) to a separate configuration file or command-line arguments for better flexibility.
+
