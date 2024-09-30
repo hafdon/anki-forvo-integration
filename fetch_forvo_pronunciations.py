@@ -65,9 +65,12 @@ def load_cache():
 # Save cache to file (atomic write)
 def save_cache(cache):
     temp_file = CACHE_FILE + ".tmp"
-    with open(temp_file, "w", encoding="utf-8") as f:
-        json.dump(cache, f, ensure_ascii=False, indent=4)
-    os.replace(temp_file, CACHE_FILE)
+    try:
+        with open(temp_file, "w", encoding="utf-8") as f:
+            json.dump(cache, f, ensure_ascii=False, indent=4)
+        os.replace(temp_file, CACHE_FILE)
+    except Exception as e:
+        logging.error(f"Failed to save cache to '{CACHE_FILE}': {e}")
 
 
 # Reset request count if it's a new day
@@ -141,10 +144,24 @@ def fetch_and_store_pronunciations(word):
         if response.status_code == 429:
             # Rate limit exceeded
             logging.warning(
-                f"Rate limit exceeded when fetching '{word}'. Sleeping for 60 seconds."
+                f"Rate limit (429) exceeded when fetching '{word}'. Sleeping for 60 seconds."
             )
             time.sleep(60)
             response = requests.get(url)  # Retry after sleeping
+
+        if response.status_code == 400:
+            # Check if the error message indicates rate limit
+            try:
+                error_message = response.json()
+            except ValueError:
+                error_message = response.text
+
+            if (
+                isinstance(error_message, list)
+                and "Limit/day reached." in error_message
+            ):
+                logging.warning(f"Daily request limit reached when fetching '{word}'.")
+                return "RATE_LIMIT_REACHED"
 
         if response.status_code != 200:
             # Log the response body for debugging
@@ -278,19 +295,13 @@ def main():
                 pronunciations = cache["pronunciations"][word]
                 if pronunciations:
                     pronunciations_dict[word] = pronunciations
-                else:
-                    # Previously failed to fetch pronunciations; attempt retry
-                    logging.info(
-                        f"Retrying pronunciation fetch for previously failed word: '{word}'"
-                    )
+                continue  # Skip to next word
+
+            # Check if the word is in failed_words
+            if word in cache.get("failed_words", {}):
+                logging.info(f"Retrying pronunciation fetch for failed word: '{word}'")
             else:
-                # Not in pronunciations; check if it's in failed_words
-                if word in cache.get("failed_words", {}):
-                    logging.info(
-                        f"Retrying pronunciation fetch for failed word: '{word}'"
-                    )
-                else:
-                    logging.info(f"Fetching pronunciations for new word: '{word}'")
+                logging.info(f"Fetching pronunciations for new word: '{word}'")
 
             # Check if the word is already in cache["pronunciations"]
             if word in cache["pronunciations"] and cache["pronunciations"][word]:
@@ -306,6 +317,16 @@ def main():
 
             logging.info(f"Fetching and storing pronunciations for word: '{word}'")
             pronunciations = fetch_and_store_pronunciations(word)
+
+            if pronunciations == "RATE_LIMIT_REACHED":
+                # Update request_count to the limit
+                cache["request_count"] = DAILY_REQUEST_LIMIT
+                logging.warning(
+                    "Daily request limit has been reached. Stopping further requests."
+                )
+                # Save the cache before breaking
+                save_cache(cache)
+                break  # Stop processing further words
 
             if pronunciations is None:
                 # Indicate failure to fetch pronunciations
