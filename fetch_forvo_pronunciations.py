@@ -4,10 +4,8 @@ import time
 from datetime import datetime
 
 import requests
-
-# import logging
-
 from dotenv import load_dotenv
+import logging
 
 # Load environment variables from .env file
 load_dotenv()
@@ -21,13 +19,10 @@ DECK_NAME = "forvo"  # Replace with your deck name
 MODEL_NAME = "Basic"  # Replace with your model name
 FIELD_NAME = "ForvoPronunciations"  # New field to store Forvo URLs
 
-CACHE_FILE = os.getenv("CACHE_FILE")  # File to store cached data
+CACHE_FILE = os.getenv("CACHE_FILE", "cache.json")  # File to store cached data
 
 # Forvo API limit
-# DAILY_REQUEST_LIMIT = os.getenv('DAILY_REQUEST_LIMIT')
 DAILY_REQUEST_LIMIT = 500  # Adjust based on Forvo's rate limits
-
-import logging
 
 # Setup logging
 logging.basicConfig(
@@ -47,7 +42,7 @@ def invoke(action, params=None):
         result = response.json()
         return result
     except requests.exceptions.RequestException as e:
-        print(f"HTTP Request failed: {e}")
+        logging.error(f"HTTP Request failed for action '{action}': {e}")
         return {"error": str(e)}
 
 
@@ -57,6 +52,7 @@ def load_cache():
         # Initialize cache structure
         cache = {
             "pronunciations": {},  # word: [list of filenames]
+            "failed_words": {},  # word: {"error": "Error message", "attempts": 0}
             "request_count": 0,  # Number of API requests made today
             "last_reset": datetime.today().strftime("%Y-%m-%d"),  # Last reset date
         }
@@ -66,18 +62,12 @@ def load_cache():
         return json.load(f)
 
 
-# Save cache to file
+# Save cache to file (atomic write)
 def save_cache(cache):
-    with open(CACHE_FILE, "w", encoding="utf-8") as f:
+    temp_file = CACHE_FILE + ".tmp"
+    with open(temp_file, "w", encoding="utf-8") as f:
         json.dump(cache, f, ensure_ascii=False, indent=4)
-
-
-def load_cache():
-    try:
-        with open(CACHE_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return {"pronunciations": {}, "request_count": 0, "last_reset": "1970-01-01"}
+    os.replace(temp_file, CACHE_FILE)
 
 
 # Reset request count if it's a new day
@@ -86,7 +76,7 @@ def reset_request_count_if_new_day(cache):
     if cache["last_reset"] != today:
         cache["request_count"] = 0
         cache["last_reset"] = today
-        print("Daily request count has been reset.")
+        logging.info("Daily request count has been reset.")
     return cache
 
 
@@ -95,79 +85,52 @@ def get_deck_cards(deck_name):
     query = f'deck:"{deck_name}"'
     params = {"query": query}
     response = invoke("findCards", params)
-    # response = { 'result' : [1726507381962, ...], 'error', None }
     if "error" in response and response["error"]:
-        print(f"Error finding cards: {response['error']}")
+        logging.error(f"Error finding cards: {response['error']}")
         return []
     card_ids = response.get("result", [])
-    print(f"Found {len(card_ids)} cards in deck '{deck_name}'.")
+    logging.info(f"Found {len(card_ids)} cards in deck '{deck_name}'.")
     return card_ids
 
 
 # Step 2: Get notes by card IDs
 def get_notes(card_ids):
+    if not card_ids:
+        logging.warning("No card IDs provided to get_notes.")
+        return []
     # First, get card information to retrieve note IDs
     params = {"cards": card_ids}
     response = invoke("cardsInfo", params)
     if "error" in response and response["error"]:
-        print(f"Error retrieving cards info: {response['error']}")
+        logging.error(f"Error retrieving cards info: {response['error']}")
         return []
 
     card_info = response.get("result", [])
-    print(card_info[0])
-    # {
-    #   cardId: 1726507381962,
-    #   fields: {
-    #     Word: { value: "cs", order: 0 },
-    #     Back: { value: " béarla", order: 1 },
-    #     frequency: { value: "", order: 2 },
-    #     ForvoPronunciations: { value: "", order: 3 },
-    #   },
-    #   fieldOrder: 0,
-    #   question:
-    #     '<the html>',
-    #   answer:
-    #     '<the html>',
-    #   modelName: "Basic",
-    #   ord: 0,
-    #   deckName: "nouns",
-    #   css: ".card {\n    font-family: arial;\n    font-size: 20px;\n    text-align: center;\n    color: black;\n    background-color: white;\n}\n",
-    #   factor: 0,
-    #   interval: 0,
-    #   note: 1726507381962,
-    #   type: 0,
-    #   queue: 0,
-    #   due: 2597,
-    #   reps: 0,
-    #   lapses: 0,
-    #   left: 0,
-    #   mod: 1727666097,
-    #   nextReviews: [
-    #     "<\u20681\u2069m",
-    #     "<\u20686\u2069m",
-    #     "<\u206810\u2069m",
-    #     "\u20684\u2069d",
-    #   ],
-    # };
+    if not card_info:
+        logging.warning("No card information retrieved.")
+        return []
 
     # Extract unique note IDs from card information
     note_ids = [card["note"] for card in card_info if "note" in card]
     unique_note_ids = list(set(note_ids))
 
     if not unique_note_ids:
-        print("No note IDs found for the given cards.")
+        logging.warning("No unique note IDs found for the given cards.")
         return []
 
     # Now, retrieve note information using note IDs
     params = {"notes": unique_note_ids}
     response = invoke("notesInfo", params)
     if "error" in response and response["error"]:
-        print(f"Error retrieving notes: {response['error']}")
+        logging.error(f"Error retrieving notes: {response['error']}")
         return []
 
-    return response.get("result", [])
+    notes = response.get("result", [])
+    logging.info(f"Retrieved information for {len(notes)} notes.")
+    return notes
 
 
+# Function to fetch and store pronunciations from Forvo
 def fetch_and_store_pronunciations(word):
     # Encode the word for URL
     encoded_word = requests.utils.quote(word)
@@ -182,16 +145,22 @@ def fetch_and_store_pronunciations(word):
             )
             time.sleep(60)
             response = requests.get(url)  # Retry after sleeping
+
         if response.status_code != 200:
+            # Log the response body for debugging
+            try:
+                error_details = response.json()
+            except ValueError:
+                error_details = response.text
             logging.error(
-                f"Error fetching Forvo data for '{word}': Status {response.status_code}"
+                f"Error fetching Forvo data for '{word}': Status {response.status_code}, Response: {error_details}"
             )
-            return []
+            return None  # Indicate failure to fetch
 
         data = response.json()
         filenames = []
 
-        if "items" in data:
+        if "items" in data and isinstance(data["items"], list):
             mp3_index = 1
             for item in data["items"]:
                 if item.get("pathmp3"):
@@ -217,33 +186,40 @@ def fetch_and_store_pronunciations(word):
                     store_params = {"filename": filename, "url": mp3_url}
                     store_response = invoke("storeMediaFile", store_params)
                     if "error" in store_response and store_response["error"]:
-                        print(
+                        logging.error(
                             f"Error storing media file '{filename}': {store_response['error']}"
                         )
                         continue
                     stored_filename = store_response.get("result")
                     if stored_filename:
                         filenames.append(f"[sound:{stored_filename}]")
-                        print(f"Stored media file '{stored_filename}'.")
+                        logging.info(f"Stored media file '{stored_filename}'.")
                     else:
-                        print(f"Failed to store media file for '{word}'.")
+                        logging.error(f"Failed to store media file for '{word}'.")
+
+        if not filenames:
+            logging.warning(f"No pronunciations found for '{word}'.")
+            return []  # Indicate no pronunciations found
 
         return filenames
+
     except Exception as e:
         logging.error(
             f"Exception occurred while fetching/storing Forvo data for '{word}': {e}"
         )
-        return []
+        return None  # Indicate failure to fetch
 
 
 # Step 4: Update Anki notes with Forvo pronunciations using updateNoteFields
 def update_anki_notes(notes, field_name, pronunciations_dict):
     if not notes:
+        logging.warning("No notes provided to update_anki_notes.")
         return
 
     for note in notes:
         word = note["fields"].get("Word", {}).get("value", "").strip()
         if not word:
+            logging.warning("Encountered a note without a 'Word' field. Skipping.")
             continue  # Skip if no word found
 
         pronunciations = pronunciations_dict.get(word, [])
@@ -261,9 +237,11 @@ def update_anki_notes(notes, field_name, pronunciations_dict):
             params = {"note": note_update}
             response = invoke("updateNoteFields", params)
             if "error" in response and response["error"]:
-                print(f"Error updating note ID {note['noteId']}: {response['error']}")
+                logging.error(
+                    f"Error updating note ID {note['noteId']}: {response['error']}"
+                )
             else:
-                print(
+                logging.info(
                     f"Successfully updated note ID {note['noteId']} with Forvo pronunciations."
                 )
 
@@ -279,7 +257,7 @@ def main():
     card_ids = get_deck_cards(DECK_NAME)
 
     if not card_ids:
-        print("No cards found. Exiting.")
+        logging.info("No cards found. Exiting.")
         return
 
     # Step 2: Get note information
@@ -292,52 +270,105 @@ def main():
         for note in notes:
             word = note["fields"].get("Word", {}).get("value", "").strip()
             if not word:
+                logging.warning("Encountered a note without a 'Word' field. Skipping.")
                 continue  # Skip if no word found
 
-            # Check if the word is already in cache
+            # Check if the word is already in cache["pronunciations"]
             if word in cache["pronunciations"]:
                 pronunciations = cache["pronunciations"][word]
                 if pronunciations:
                     pronunciations_dict[word] = pronunciations
-                continue  # Skip to next word
+                else:
+                    # Previously failed to fetch pronunciations; attempt retry
+                    logging.info(
+                        f"Retrying pronunciation fetch for previously failed word: '{word}'"
+                    )
+            else:
+                # Not in pronunciations; check if it's in failed_words
+                if word in cache.get("failed_words", {}):
+                    logging.info(
+                        f"Retrying pronunciation fetch for failed word: '{word}'"
+                    )
+                else:
+                    logging.info(f"Fetching pronunciations for new word: '{word}'")
+
+            # Check if the word is already in cache["pronunciations"]
+            if word in cache["pronunciations"] and cache["pronunciations"][word]:
+                # Already have pronunciations; skip
+                continue
 
             # Check if daily limit is reached
             if cache["request_count"] >= DAILY_REQUEST_LIMIT:
-                print(
+                logging.warning(
                     f"Daily request limit of {DAILY_REQUEST_LIMIT} reached. Stopping."
                 )
                 break
 
-            print(f"Fetching and storing pronunciations for word: '{word}'")
+            logging.info(f"Fetching and storing pronunciations for word: '{word}'")
             pronunciations = fetch_and_store_pronunciations(word)
 
-            # Update cache
-            cache["pronunciations"][word] = pronunciations
-            if pronunciations:
+            if pronunciations is None:
+                # Indicate failure to fetch pronunciations
+                cache.setdefault("failed_words", {})[word] = {
+                    "error": "Failed to fetch pronunciations due to an error.",
+                    "attempts": cache.get("failed_words", {})
+                    .get(word, {})
+                    .get("attempts", 0)
+                    + 1,
+                    "last_attempt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                }
+                logging.warning(
+                    f"Failed to fetch pronunciations for '{word}'. Marked for retry."
+                )
+            elif not pronunciations:
+                # No pronunciations found
+                cache.setdefault("failed_words", {})[word] = {
+                    "error": "No pronunciations found.",
+                    "attempts": cache.get("failed_words", {})
+                    .get(word, {})
+                    .get("attempts", 0)
+                    + 1,
+                    "last_attempt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                }
+                logging.info(f"No pronunciations found for '{word}'. Marked for retry.")
+            else:
+                # Successfully fetched pronunciations
+                cache["pronunciations"][word] = pronunciations
                 pronunciations_dict[word] = pronunciations
+                # Remove from failed_words if present
+                if "failed_words" in cache and word in cache["failed_words"]:
+                    del cache["failed_words"][word]
+                logging.info(f"Successfully fetched pronunciations for '{word}'.")
 
             # Increment request count if an API request was made
             cache["request_count"] += 1
 
             # Save the updated cache after processing each word
             save_cache(cache)
+            logging.info(f"Cache saved after processing word: '{word}'.")
 
             # To respect API rate limits, sleep if necessary
             time.sleep(1)  # Adjust based on Forvo's rate limits
 
     except KeyboardInterrupt:
-        print("\nProcess interrupted by user. Saving cache before exiting.")
+        logging.warning("Process interrupted by user. Saving cache before exiting.")
 
     finally:
         # Save the cache one last time before exiting
         save_cache(cache)
-        print("Cache has been updated and saved.")
+        logging.info("Final cache has been updated and saved.")
 
     # Step 4: Update Anki with new pronunciations using updateNoteFields
     if pronunciations_dict:
         update_anki_notes(notes, FIELD_NAME, pronunciations_dict)
     else:
-        print("No new pronunciations to update.")
+        logging.info("No new pronunciations to update.")
+
+    # Optional: Log summary of failed words
+    if "failed_words" in cache and cache["failed_words"]:
+        logging.info(f"Total failed words: {len(cache['failed_words'])}")
+        for word, details in cache["failed_words"].items():
+            logging.info(f"Word: {word}, Details: {details}")
 
 
 if __name__ == "__main__":
