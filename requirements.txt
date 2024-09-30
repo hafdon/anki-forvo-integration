@@ -1,0 +1,11 @@
+cached-property==1.5.2
+certifi==2024.8.30
+charset-normalizer==3.3.2
+chevron==0.14.0
+frozendict==2.4.4
+genanki==0.13.1
+idna==3.10
+python-dotenv==1.0.1
+PyYAML==6.0.2
+requests==2.32.3
+urllib3==2.2.3
