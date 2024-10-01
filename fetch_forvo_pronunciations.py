@@ -4,11 +4,7 @@ import time
 from datetime import datetime
 
 import requests
-from dotenv import load_dotenv
 import logging
-
-# Load environment variables from .env file
-load_dotenv()
 
 # Configuration
 ANKI_CONNECT_URL = os.getenv("ANKI_CONNECT_URL")

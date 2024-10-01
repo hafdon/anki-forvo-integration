@@ -15,6 +15,7 @@ A Python script that fetches pronunciations from the Forvo API, caches results t
 - Python 3.7 or higher
 - [AnkiConnect](https://ankiweb.net/shared/info/2055492159) Anki add-on installed and running
 - Forvo API Key
+  - Forvo account url: https://api.forvo.com/account/
 
 ## 📦 Installation
 
@@ -65,10 +66,39 @@ A Python script that fetches pronunciations from the Forvo API, caches results t
 
 ## 🎬 Usage
 
-Run the script using Python:
+Run the script using Python. `usage: main.py [-h] [--query QUERY]` You can run the script in various ways:
+
+### Using Command-Line Arguments
 
 ```bash
+python main.py --query 'deck:"Spanish Vocabulary" tag:verb is:due'
+```
+
+### Using Environment Variables
+
+You can set the ANKI_SEARCH_QUERY environment variable to define a default query without needing to pass it every time:
+
+```bash
+export ANKI_SEARCH_QUERY='deck:"Spanish Vocabulary" tag:verb is:due'
 python main.py
+```
+
+### Combining Both
+
+Command-line arguments will override environment variables if both are provided.
+
+### Example Usage
+
+To run the script with a custom retry period of 45 days:
+
+```bash
+python main.py --query 'deck:"English Vocabulary"' --retry_after_days 45
+```
+
+If you prefer to keep the default of 30 days, you can omit the `--retry_after_days` argument:
+
+```bash
+python main.py --query 'deck:"English Vocabulary"'
 ```
 
 ### What It Does:

@@ -18,9 +18,8 @@ def backup_keep_days():
     # Convert to an integer if the value exists
     if BACKUP_KEEP_DAYS is not None:
         value_int = int(BACKUP_KEEP_DAYS)
-        print(f"The value as an integer: {value_int}")
     else:
-        print("VALUE is not set")
+        print("BACKUP_KEEP_DAYS is not set. Using 31")
     return value_int or 31
 
 
@@ -61,6 +60,8 @@ def backup_cache():
 
 
 def main():
+
+    print("Logging to log file.")
 
     limit_backups()
     backup_cache()
