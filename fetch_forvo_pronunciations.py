@@ -1,20 +1,21 @@
 import json
 import os
 import time
-from datetime import datetime
+import argparse
+from datetime import datetime, timedelta
 
 import requests
 import logging
 
 # Configuration
-ANKI_CONNECT_URL = os.getenv("ANKI_CONNECT_URL")
+ANKI_CONNECT_URL = os.getenv("ANKI_CONNECT_URL", "http://localhost:8765")
 FORVO_API_KEY = os.getenv("FORVO_API_KEY")  # Replace with your actual Forvo API key
-FORVO_LANGUAGE = os.getenv("FORVO_LANGUAGE")  # Adjust based on your needs
-
-DECK_NAME = "forvo"  # Replace with your deck name
-MODEL_NAME = "Basic"  # Replace with your model name
-FIELD_NAME = "ForvoPronunciations"  # New field to store Forvo URLs
-
+FORVO_LANGUAGE = os.getenv("FORVO_LANGUAGE", "en")  # Default to English
+DEFAULT_QUERY = os.getenv(
+    "ANKI_SEARCH_QUERY", 'deck:"Default"'
+)  # Default query if none provided
+MODEL_NAME = os.getenv("MODEL_NAME", "Basic")
+FIELD_NAME = os.getenv("FIELD_NAME", "ForvoPronunciations")
 CACHE_FILE = os.getenv("CACHE_FILE", "cache.json")  # File to store cached data
 
 # Forvo API limit
@@ -79,16 +80,15 @@ def reset_request_count_if_new_day(cache):
     return cache
 
 
-# Step 1: Retrieve all cards from the specified deck
-def get_deck_cards(deck_name):
-    query = f'deck:"{deck_name}"'
+# Step 1: Retrieve all cards based on a search query
+def get_cards(query):
     params = {"query": query}
     response = invoke("findCards", params)
     if "error" in response and response["error"]:
-        logging.error(f"Error finding cards: {response['error']}")
+        logging.error(f"Error finding cards with query '{query}': {response['error']}")
         return []
     card_ids = response.get("result", [])
-    logging.info(f"Found {len(card_ids)} cards in deck '{deck_name}'.")
+    logging.info(f"Found {len(card_ids)} cards with query '{query}'.")
     return card_ids
 
 
@@ -260,14 +260,34 @@ def update_anki_notes(notes, field_name, pronunciations_dict):
 
 
 def main():
+    # Parse command-line arguments for the search query and retry configuration
+    parser = argparse.ArgumentParser(
+        description="Fetch Forvo pronunciations and update Anki notes based on a search query."
+    )
+    parser.add_argument(
+        "--query",
+        type=str,
+        default=DEFAULT_QUERY,
+        help='Anki search query (default: deck:"Default")',
+    )
+    parser.add_argument(
+        "--retry_after_days",
+        type=int,
+        default=30,
+        help="Number of days to wait before retrying a failed word (default: 30)",
+    )
+    args = parser.parse_args()
+    search_query = args.query
+    retry_after_days = args.retry_after_days
+
     # Load cache
     cache = load_cache()
 
     # Reset request count if a new day
     cache = reset_request_count_if_new_day(cache)
 
-    # Step 1: Get all card IDs in the deck
-    card_ids = get_deck_cards(DECK_NAME)
+    # Step 1: Get all card IDs based on the search query
+    card_ids = get_cards(search_query)
 
     if not card_ids:
         logging.info("No cards found. Exiting.")
@@ -281,31 +301,51 @@ def main():
 
     try:
         for note in notes:
+            # Get the value of the 'Word' field.
             word = note["fields"].get("Word", {}).get("value", "").strip()
             if not word:
                 logging.warning("Encountered a note without a 'Word' field. Skipping.")
                 continue  # Skip if no word found
 
             # Check if the word is already in cache["pronunciations"]
-            if word in cache["pronunciations"]:
+            if word in cache.get("pronunciations", {}):
                 pronunciations = cache["pronunciations"][word]
                 if pronunciations:
                     pronunciations_dict[word] = pronunciations
                 continue  # Skip to next word
 
             # Check if the word is in failed_words
-            if word in cache.get("failed_words", {}):
-                logging.info(f"Retrying pronunciation fetch for failed word: '{word}'")
+            failed_words = cache.get("failed_words", {})
+            if word in failed_words:
+                last_attempt_str = failed_words[word].get("last_attempt")
+                if last_attempt_str:
+                    try:
+                        last_attempt = datetime.strptime(
+                            last_attempt_str, "%Y-%m-%d %H:%M:%S"
+                        )
+                        time_since_last_attempt = datetime.now() - last_attempt
+                        if time_since_last_attempt < timedelta(days=retry_after_days):
+                            logging.info(
+                                f"Skipping word '{word}' as last attempt was {time_since_last_attempt.days} days ago."
+                            )
+                            continue  # Skip this word
+                        else:
+                            logging.info(
+                                f"Retrying pronunciation fetch for word: '{word}'"
+                            )
+                    except ValueError:
+                        logging.warning(
+                            f"Invalid date format for word '{word}'. Proceeding to retry."
+                        )
+                else:
+                    logging.info(
+                        f"No 'last_attempt' found for word '{word}'. Proceeding to retry."
+                    )
             else:
                 logging.info(f"Fetching pronunciations for new word: '{word}'")
 
-            # Check if the word is already in cache["pronunciations"]
-            if word in cache["pronunciations"] and cache["pronunciations"][word]:
-                # Already have pronunciations; skip
-                continue
-
             # Check if daily limit is reached
-            if cache["request_count"] >= DAILY_REQUEST_LIMIT:
+            if cache.get("request_count", 0) >= DAILY_REQUEST_LIMIT:
                 logging.warning(
                     f"Daily request limit of {DAILY_REQUEST_LIMIT} reached. Stopping."
                 )
@@ -350,7 +390,7 @@ def main():
                 logging.info(f"No pronunciations found for '{word}'. Marked for retry.")
             else:
                 # Successfully fetched pronunciations
-                cache["pronunciations"][word] = pronunciations
+                cache.setdefault("pronunciations", {})[word] = pronunciations
                 pronunciations_dict[word] = pronunciations
                 # Remove from failed_words if present
                 if "failed_words" in cache and word in cache["failed_words"]:
@@ -358,7 +398,13 @@ def main():
                 logging.info(f"Successfully fetched pronunciations for '{word}'.")
 
             # Increment request count if an API request was made
-            cache["request_count"] += 1
+            cache["request_count"] = cache.get("request_count", 0) + 1
+
+            # Update 'last_attempt' regardless of success or failure
+            if "failed_words" in cache and word not in cache["pronunciations"]:
+                cache["failed_words"][word]["last_attempt"] = datetime.now().strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                )
 
             # Save the updated cache after processing each word
             save_cache(cache)
