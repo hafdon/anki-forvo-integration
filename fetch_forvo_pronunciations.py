@@ -1,11 +1,13 @@
-import json
 import os
 import time
 import argparse
 from datetime import datetime, timedelta
 
-import requests
 import logging
+
+from anki_helper import get_cards, get_notes, update_anki_notes
+from cache_helper import load_cache, reset_request_count_if_new_day, save_cache
+from forvo_helper import fetch_and_store_pronunciations
 
 # Configuration
 ANKI_CONNECT_URL = os.getenv("ANKI_CONNECT_URL", "http://localhost:8765")
@@ -29,238 +31,7 @@ logging.basicConfig(
 )
 
 
-# Function to make requests to AnkiConnect
-def invoke(action, params=None):
-    try:
-        response = requests.post(
-            ANKI_CONNECT_URL, json={"action": action, "version": 6, "params": params}
-        )
-        response.raise_for_status()
-        result = response.json()
-        return result
-    except requests.exceptions.RequestException as e:
-        logging.error(f"HTTP Request failed for action '{action}': {e}")
-        return {"error": str(e)}
-
-
-# Load cache from file
-def load_cache():
-    if not os.path.exists(CACHE_FILE):
-        # Initialize cache structure
-        cache = {
-            "pronunciations": {},  # word: [list of filenames]
-            "failed_words": {},  # word: {"error": "Error message", "attempts": 0}
-            "request_count": 0,  # Number of API requests made today
-            "last_reset": datetime.today().strftime("%Y-%m-%d"),  # Last reset date
-        }
-        save_cache(cache)
-        return cache
-    with open(CACHE_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-# Save cache to file (atomic write)
-def save_cache(cache):
-    temp_file = CACHE_FILE + ".tmp"
-    try:
-        with open(temp_file, "w", encoding="utf-8") as f:
-            json.dump(cache, f, ensure_ascii=False, indent=4)
-        os.replace(temp_file, CACHE_FILE)
-    except Exception as e:
-        logging.error(f"Failed to save cache to '{CACHE_FILE}': {e}")
-
-
-# Reset request count if it's a new day
-def reset_request_count_if_new_day(cache):
-    today = datetime.today().strftime("%Y-%m-%d")
-    if cache["last_reset"] != today:
-        cache["request_count"] = 0
-        cache["last_reset"] = today
-        logging.info("Daily request count has been reset.")
-    return cache
-
-
-# Step 1: Retrieve all cards based on a search query
-def get_cards(query):
-    params = {"query": query}
-    response = invoke("findCards", params)
-    if "error" in response and response["error"]:
-        logging.error(f"Error finding cards with query '{query}': {response['error']}")
-        return []
-    card_ids = response.get("result", [])
-    logging.info(f"Found {len(card_ids)} cards with query '{query}'.")
-    return card_ids
-
-
-# Step 2: Get notes by card IDs
-def get_notes(card_ids):
-    if not card_ids:
-        logging.warning("No card IDs provided to get_notes.")
-        return []
-    # First, get card information to retrieve note IDs
-    params = {"cards": card_ids}
-    response = invoke("cardsInfo", params)
-    if "error" in response and response["error"]:
-        logging.error(f"Error retrieving cards info: {response['error']}")
-        return []
-
-    card_info = response.get("result", [])
-    if not card_info:
-        logging.warning("No card information retrieved.")
-        return []
-
-    # Extract unique note IDs from card information
-    note_ids = [card["note"] for card in card_info if "note" in card]
-    unique_note_ids = list(set(note_ids))
-
-    if not unique_note_ids:
-        logging.warning("No unique note IDs found for the given cards.")
-        return []
-
-    # Now, retrieve note information using note IDs
-    params = {"notes": unique_note_ids}
-    response = invoke("notesInfo", params)
-    if "error" in response and response["error"]:
-        logging.error(f"Error retrieving notes: {response['error']}")
-        return []
-
-    notes = response.get("result", [])
-    logging.info(f"Retrieved information for {len(notes)} notes.")
-    return notes
-
-
-# Function to fetch and store pronunciations from Forvo
-def fetch_and_store_pronunciations(word):
-    # Encode the word for URL
-    encoded_word = requests.utils.quote(word)
-    url = f"https://apifree.forvo.com/key/{FORVO_API_KEY}/format/json/action/word-pronunciations/word/{encoded_word}/language/{FORVO_LANGUAGE}"
-
-    try:
-        response = requests.get(url)
-        if response.status_code == 429:
-            # Rate limit exceeded
-            logging.warning(
-                f"Rate limit (429) exceeded when fetching '{word}'. Sleeping for 60 seconds."
-            )
-            time.sleep(60)
-            response = requests.get(url)  # Retry after sleeping
-
-        if response.status_code == 400:
-            # Check if the error message indicates rate limit
-            try:
-                error_message = response.json()
-            except ValueError:
-                error_message = response.text
-
-            if (
-                isinstance(error_message, list)
-                and "Limit/day reached." in error_message
-            ):
-                logging.warning(f"Daily request limit reached when fetching '{word}'.")
-                return "RATE_LIMIT_REACHED"
-
-        if response.status_code != 200:
-            # Log the response body for debugging
-            try:
-                error_details = response.json()
-            except ValueError:
-                error_details = response.text
-            logging.error(
-                f"Error fetching Forvo data for '{word}': Status {response.status_code}, Response: {error_details}"
-            )
-            return None  # Indicate failure to fetch
-
-        data = response.json()
-        filenames = []
-
-        if "items" in data and isinstance(data["items"], list):
-            mp3_index = 1
-            for item in data["items"]:
-                if item.get("pathmp3"):
-                    mp3_url = item["pathmp3"]
-
-                    # Check if mp3_url is already a full URL
-                    if not mp3_url.startswith("http"):
-                        # If it's a relative path, prepend the base URL
-                        if not mp3_url.startswith("/"):
-                            mp3_url = "/" + mp3_url
-                        mp3_url = f"https://apifree.forvo.com{mp3_url}"
-
-                    # Generate a unique filename
-                    dialect = item.get("dialect", "random").replace(
-                        " ", "_"
-                    )  # Assuming 'dialect' field exists
-                    filename = f"{word}_{dialect}_{mp3_index}.mp3".replace(
-                        "/", "_"
-                    )  # Replace any '/' to avoid path issues
-                    mp3_index += 1
-
-                    # Store the media file in Anki
-                    store_params = {"filename": filename, "url": mp3_url}
-                    store_response = invoke("storeMediaFile", store_params)
-                    if "error" in store_response and store_response["error"]:
-                        logging.error(
-                            f"Error storing media file '{filename}': {store_response['error']}"
-                        )
-                        continue
-                    stored_filename = store_response.get("result")
-                    if stored_filename:
-                        filenames.append(f"[sound:{stored_filename}]")
-                        logging.info(f"Stored media file '{stored_filename}'.")
-                    else:
-                        logging.error(f"Failed to store media file for '{word}'.")
-
-        if not filenames:
-            logging.warning(f"No pronunciations found for '{word}'.")
-            return []  # Indicate no pronunciations found
-
-        return filenames
-
-    except Exception as e:
-        logging.error(
-            f"Exception occurred while fetching/storing Forvo data for '{word}': {e}"
-        )
-        return None  # Indicate failure to fetch
-
-
-# Step 4: Update Anki notes with Forvo pronunciations using updateNoteFields
-def update_anki_notes(notes, field_name, pronunciations_dict):
-    if not notes:
-        logging.warning("No notes provided to update_anki_notes.")
-        return
-
-    for note in notes:
-        word = note["fields"].get("Word", {}).get("value", "").strip()
-        if not word:
-            logging.warning("Encountered a note without a 'Word' field. Skipping.")
-            continue  # Skip if no word found
-
-        pronunciations = pronunciations_dict.get(word, [])
-        if pronunciations:
-            # Join all [sound:...] tags with line breaks
-            sounds = "<br>".join(pronunciations)
-
-            # Prepare the note object for updateNoteFields
-            note_update = {
-                "id": note["noteId"],  # Ensure 'id' is correct
-                "fields": {field_name: sounds},
-            }
-
-            # Invoke updateNoteFields for each note
-            params = {"note": note_update}
-            response = invoke("updateNoteFields", params)
-            if "error" in response and response["error"]:
-                logging.error(
-                    f"Error updating note ID {note['noteId']}: {response['error']}"
-                )
-            else:
-                logging.info(
-                    f"Successfully updated note ID {note['noteId']} with Forvo pronunciations."
-                )
-
-
-def main():
-    # Parse command-line arguments for the search query and retry configuration
+def parse_local_args():
     parser = argparse.ArgumentParser(
         description="Fetch Forvo pronunciations and update Anki notes based on a search query."
     )
@@ -279,6 +50,31 @@ def main():
     args = parser.parse_args()
     search_query = args.query
     retry_after_days = args.retry_after_days
+    return search_query, retry_after_days
+
+
+def notes_from_query(cards):
+
+    # Step 1: Get all card IDs based on the search query
+    card_ids = get_cards(search_query)
+
+    if not card_ids:
+        logging.info("No cards found.")
+        return False
+
+    # Step 2: Get note information
+    notes = get_notes(card_ids)
+
+    if not notes:
+        logging.info("No notes found.")
+        return False
+
+    return notes
+
+
+def main():
+    # Parse command-line arguments for the search query and retry configuration
+    search_query, retry_after_days = parse_local_args()
 
     # Load cache
     cache = load_cache()
@@ -286,15 +82,10 @@ def main():
     # Reset request count if a new day
     cache = reset_request_count_if_new_day(cache)
 
-    # Step 1: Get all card IDs based on the search query
-    card_ids = get_cards(search_query)
-
-    if not card_ids:
-        logging.info("No cards found. Exiting.")
+    notes = notes_from_query(search_query)
+    if not notes:
+        logging.info("No notes found. Exiting.")
         return
-
-    # Step 2: Get note information
-    notes = get_notes(card_ids)
 
     # Prepare to update notes
     pronunciations_dict = {}
