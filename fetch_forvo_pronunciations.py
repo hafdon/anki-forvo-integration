@@ -94,6 +94,13 @@ def main():
 
     try:
         for note in notes:
+
+            # Check if daily limit is reached
+            # Don't bother checking if so
+            if cache.is_request_limit():
+                logging.warning(f"Stopping.")
+                break
+
             # Get the value of the 'Word' field.
             word = note["fields"].get("Word", {}).get("value", "").strip()
             if not word:
@@ -139,49 +146,31 @@ def main():
             else:
                 logging.info(f"Fetching pronunciations for new word: '{word}'")
 
-            # Check if daily limit is reached
-            if cache.get("request_count", 0) >= DAILY_REQUEST_LIMIT:
-                logging.warning(
-                    f"Daily request limit of {DAILY_REQUEST_LIMIT} reached. Stopping."
-                )
-                break
-
             logging.info(f"Fetching and storing pronunciations for word: '{word}'")
             pronunciations = fetch_and_store_pronunciations(word)
 
             if pronunciations == "RATE_LIMIT_REACHED":
-                # Update request_count to the limit
-                cache["request_count"] = DAILY_REQUEST_LIMIT
-                logging.warning(
-                    "Daily request limit has been reached. Stopping further requests."
-                )
+                logging.warning("Daily request limit has been reached.")
+                logging.warning('Stopping further requests."')
                 # Save the cache before breaking
-                save_cache(cache)
+                cache.set_request_limit()
                 break  # Stop processing further words
 
+            ###
+            ###
+            ### FAILURE to fetch specific pronunciation
             if pronunciations is None:
                 # Indicate failure to fetch pronunciations
-                cache.setdefault("failed_words", {})[word] = {
-                    "error": "Failed to fetch pronunciations due to an error.",
-                    "attempts": cache.get("failed_words", {})
-                    .get(word, {})
-                    .get("attempts", 0)
-                    + 1,
-                    "last_attempt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                }
+                cache.increment_fetch_failure(
+                    word, "Failed to fetch pronunciations due to an error."
+                )
                 logging.warning(
                     f"Failed to fetch pronunciations for '{word}'. Marked for retry."
                 )
+            ### NO EXISTING specific pronunciation
             elif not pronunciations:
                 # No pronunciations found
-                cache.setdefault("failed_words", {})[word] = {
-                    "error": "No pronunciations found.",
-                    "attempts": cache.get("failed_words", {})
-                    .get(word, {})
-                    .get("attempts", 0)
-                    + 1,
-                    "last_attempt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                }
+                cache.increment_fetch_failure(word, "No pronunciations found.")
                 logging.info(f"No pronunciations found for '{word}'. Marked for retry.")
             else:
                 # Successfully fetched pronunciations
@@ -193,16 +182,13 @@ def main():
                 logging.info(f"Successfully fetched pronunciations for '{word}'.")
 
             # Increment request count if an API request was made
-            cache["request_count"] = cache.get("request_count", 0) + 1
+            cache.increment_request_count()
 
             # Update 'last_attempt' regardless of success or failure
-            if "failed_words" in cache and word not in cache["pronunciations"]:
-                cache["failed_words"][word]["last_attempt"] = datetime.now().strftime(
-                    "%Y-%m-%d %H:%M:%S"
-                )
+            cache.set_last_attempt(word)
 
             # Save the updated cache after processing each word
-            save_cache(cache)
+            cache.save_cache()
             logging.info(f"Cache saved after processing word: '{word}'.")
 
             # To respect API rate limits, sleep if necessary
@@ -223,10 +209,7 @@ def main():
         logging.info("No new pronunciations to update.")
 
     # Optional: Log summary of failed words
-    if "failed_words" in cache and cache["failed_words"]:
-        logging.info(f"Total failed words: {len(cache['failed_words'])}")
-        for word, details in cache["failed_words"].items():
-            logging.info(f"Word: {word}, Details: {details}")
+    cache.log_failed_words()
 
 
 if __name__ == "__main__":
