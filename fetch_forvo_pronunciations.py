@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import logging
 
 from anki_helper import get_cards, get_notes, update_anki_notes
+from cache.cache_manager import CacheManager
 from cache_helper import load_cache, reset_request_count_if_new_day, save_cache
 from forvo_helper import fetch_and_store_pronunciations
 
@@ -76,11 +77,12 @@ def main():
     # Parse command-line arguments for the search query and retry configuration
     search_query, retry_after_days = parse_local_args()
 
+    cache = CacheManager(CACHE_FILE)
     # Load cache
-    cache = load_cache()
+    cache.load_cache(CACHE_FILE)
 
     # Reset request count if a new day
-    cache = reset_request_count_if_new_day(cache)
+    cache.reset_request_count_if_new_day()
 
     notes = notes_from_query(search_query)
     if not notes:
@@ -100,38 +102,40 @@ def main():
 
             # Check if the word is already in cache["pronunciations"]
             if word in cache.get("pronunciations", {}):
+                # pronunciations = the value of key "word" (an array of pronunciations)
                 pronunciations = cache["pronunciations"][word]
+                # if these pronunciations exist, add them to the
+                # dict structure. This dict structure is later used to update notes
                 if pronunciations:
                     pronunciations_dict[word] = pronunciations
                 continue  # Skip to next word
 
             # Check if the word is in failed_words
-            failed_words = cache.get("failed_words", {})
-            if word in failed_words:
-                last_attempt_str = failed_words[word].get("last_attempt")
-                if last_attempt_str:
-                    try:
-                        last_attempt = datetime.strptime(
-                            last_attempt_str, "%Y-%m-%d %H:%M:%S"
-                        )
-                        time_since_last_attempt = datetime.now() - last_attempt
-                        if time_since_last_attempt < timedelta(days=retry_after_days):
-                            logging.info(
-                                f"Skipping word '{word}' as last attempt was {time_since_last_attempt.days} days ago."
-                            )
-                            continue  # Skip this word
-                        else:
-                            logging.info(
-                                f"Retrying pronunciation fetch for word: '{word}'"
-                            )
-                    except ValueError:
-                        logging.warning(
-                            f"Invalid date format for word '{word}'. Proceeding to retry."
-                        )
-                else:
+            # failed_words = cache.get_failed_words()
+            if cache.is_failed_word(word):
+                # last_attempt_str = failed_words[word].get("last_attempt")
+                # last_attempt_str = cache.get_last_attempt_str(word)
+                # if last_attempt_str:
+                # try:
+                # last_attempt = datetime.strptime(
+                #     last_attempt_str, "%Y-%m-%d %H:%M:%S"
+                # )
+                time_since_last_attempt = cache.get_time_since_last_attempt(word)
+                if time_since_last_attempt < timedelta(days=retry_after_days):
                     logging.info(
-                        f"No 'last_attempt' found for word '{word}'. Proceeding to retry."
+                        f"Skipping word '{word}' as last attempt was {time_since_last_attempt.days} days ago."
                     )
+                    continue  # Skip this word
+                else:
+                    logging.info(f"Retrying pronunciation fetch for word: '{word}'")
+                    # except ValueError:
+                    #     logging.warning(
+                    #         f"Invalid date format for word '{word}'. Proceeding to retry."
+                    #     )
+                # else:
+                #     logging.info(
+                #         f"No 'last_attempt' found for word '{word}'. Proceeding to retry."
+                #     )
             else:
                 logging.info(f"Fetching pronunciations for new word: '{word}'")
 
