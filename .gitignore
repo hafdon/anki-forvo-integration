@@ -165,4 +165,5 @@ cython_debug/
 
 # Data
 cache.json
-temp.txt
+temp.*
+config.py
