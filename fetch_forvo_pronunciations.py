@@ -8,7 +8,7 @@ import logging
 from anki_helper import get_cards, get_notes, update_anki_notes
 from cache.cache_manager import CacheManager
 from cache_helper import load_cache, reset_request_count_if_new_day, save_cache
-from forvo_helper import fetch_and_store_pronunciations
+from forvo_helper import ForvoManager, fetch_and_store_pronunciations
 
 # Configuration
 ANKI_CONNECT_URL = os.getenv("ANKI_CONNECT_URL", "http://localhost:8765")
@@ -23,131 +23,67 @@ CACHE_FILE = os.getenv("CACHE_FILE", "cache.json")  # File to store cached data
 
 # Forvo API limit
 DAILY_REQUEST_LIMIT = 500  # Adjust based on Forvo's rate limits
-
-# Setup logging
-logging.basicConfig(
-    filename="fetch_forvo_pronunciations.log",
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-)
-
-
-def parse_local_args():
-    parser = argparse.ArgumentParser(
-        description="Fetch Forvo pronunciations and update Anki notes based on a search query."
-    )
-    parser.add_argument(
-        "--query",
-        type=str,
-        default=DEFAULT_QUERY,
-        help='Anki search query (default: deck:"Default")',
-    )
-    parser.add_argument(
-        "--retry_after_days",
-        type=int,
-        default=30,
-        help="Number of days to wait before retrying a failed word (default: 30)",
-    )
-    args = parser.parse_args()
-    search_query = args.query
-    retry_after_days = args.retry_after_days
-    return search_query, retry_after_days
-
-
-def notes_from_query(cards):
-
-    # Step 1: Get all card IDs based on the search query
-    card_ids = get_cards(search_query)
-
-    if not card_ids:
-        logging.info("No cards found.")
-        return False
-
-    # Step 2: Get note information
-    notes = get_notes(card_ids)
-
-    if not notes:
-        logging.info("No notes found.")
-        return False
-
-    return notes
+RETRY_AFTER_DAYS = 31
 
 
 def main():
     # Parse command-line arguments for the search query and retry configuration
     search_query, retry_after_days = parse_local_args()
 
-    cache = CacheManager(CACHE_FILE)
+    cache = CacheManager(CACHE_FILE, DAILY_REQUEST_LIMIT, retry_after_days)
+    anki = AnkiManager()
+    forvo = ForvoManager()
+
     # Load cache
     cache.load_cache(CACHE_FILE)
 
     # Reset request count if a new day
     cache.reset_request_count_if_new_day()
 
-    notes = notes_from_query(search_query)
+    notes = anki.notes_from_query(search_query)
     if not notes:
         logging.info("No notes found. Exiting.")
         return
+    # If note has no "Word" field value,
+    # skip it
+    # then map to the word of the note
+    filtered_words = [
+        anki.get_note_field_value(note, "Word")
+        for note in notes
+        if anki.has_note_field_value(note, "Word")
+    ]
+
+    # # Check if the word is in failed_words
+    # if cache.is_failed_word(word) and not cache.can_reattempt(word):
+    #     logging.info(f"Skipping word '{word}'.")
+    #     continue  # Skip this word
+    can_attempt_words = [
+        word
+        for word in filtered_words
+        if
+        # it doesn't have any pronunciations and it doesn't have any failues
+        ((not cache.has_pronunciations(word)) and (not cache.is_failed_word(word)))
+        # or it has failed, but we can reattempt
+        or (cache.is_failed_word(word) and cache.can_reattempt(word))
+    ]
 
     # Prepare to update notes
-    pronunciations_dict = {}
 
     try:
-        for note in notes:
+        for word in can_attempt_words:
 
-            # Check if daily limit is reached
-            # Don't bother checking if so
+            ### Check request limit
+            ### BAIL COMPLETELY
             if cache.is_request_limit():
                 logging.warning(f"Stopping.")
                 break
 
-            # Get the value of the 'Word' field.
-            word = note["fields"].get("Word", {}).get("value", "").strip()
-            if not word:
-                logging.warning("Encountered a note without a 'Word' field. Skipping.")
-                continue  # Skip if no word found
-
-            # Check if the word is already in cache["pronunciations"]
-            if word in cache.get("pronunciations", {}):
-                # pronunciations = the value of key "word" (an array of pronunciations)
-                pronunciations = cache["pronunciations"][word]
-                # if these pronunciations exist, add them to the
-                # dict structure. This dict structure is later used to update notes
-                if pronunciations:
-                    pronunciations_dict[word] = pronunciations
-                continue  # Skip to next word
-
-            # Check if the word is in failed_words
-            # failed_words = cache.get_failed_words()
-            if cache.is_failed_word(word):
-                # last_attempt_str = failed_words[word].get("last_attempt")
-                # last_attempt_str = cache.get_last_attempt_str(word)
-                # if last_attempt_str:
-                # try:
-                # last_attempt = datetime.strptime(
-                #     last_attempt_str, "%Y-%m-%d %H:%M:%S"
-                # )
-                time_since_last_attempt = cache.get_time_since_last_attempt(word)
-                if time_since_last_attempt < timedelta(days=retry_after_days):
-                    logging.info(
-                        f"Skipping word '{word}' as last attempt was {time_since_last_attempt.days} days ago."
-                    )
-                    continue  # Skip this word
-                else:
-                    logging.info(f"Retrying pronunciation fetch for word: '{word}'")
-                    # except ValueError:
-                    #     logging.warning(
-                    #         f"Invalid date format for word '{word}'. Proceeding to retry."
-                    #     )
-                # else:
-                #     logging.info(
-                #         f"No 'last_attempt' found for word '{word}'. Proceeding to retry."
-                #     )
-            else:
-                logging.info(f"Fetching pronunciations for new word: '{word}'")
+            ###
+            ### FETCH PRONUNCIATIONS
+            ###
 
             logging.info(f"Fetching and storing pronunciations for word: '{word}'")
-            pronunciations = fetch_and_store_pronunciations(word)
+            pronunciations = forvo.fetch_and_store_pronunciations(word)
 
             if pronunciations == "RATE_LIMIT_REACHED":
                 logging.warning("Daily request limit has been reached.")
@@ -156,8 +92,6 @@ def main():
                 cache.set_request_limit()
                 break  # Stop processing further words
 
-            ###
-            ###
             ### FAILURE to fetch specific pronunciation
             if pronunciations is None:
                 # Indicate failure to fetch pronunciations
@@ -167,18 +101,22 @@ def main():
                 logging.warning(
                     f"Failed to fetch pronunciations for '{word}'. Marked for retry."
                 )
+
             ### NO EXISTING specific pronunciation
             elif not pronunciations:
                 # No pronunciations found
                 cache.increment_fetch_failure(word, "No pronunciations found.")
                 logging.info(f"No pronunciations found for '{word}'. Marked for retry.")
+
+            ### SUCCESSFULLY fetched pronunciation
             else:
                 # Successfully fetched pronunciations
                 cache.setdefault("pronunciations", {})[word] = pronunciations
-                pronunciations_dict[word] = pronunciations
+                anki.write_to_buffer(word, pronunciations)
+
                 # Remove from failed_words if present
-                if "failed_words" in cache and word in cache["failed_words"]:
-                    del cache["failed_words"][word]
+                cache.set_unfailed(word)
+
                 logging.info(f"Successfully fetched pronunciations for '{word}'.")
 
             # Increment request count if an API request was made
@@ -199,14 +137,15 @@ def main():
 
     finally:
         # Save the cache one last time before exiting
-        save_cache(cache)
+        # save_cache(cache)
+        cache.save_cache()
         logging.info("Final cache has been updated and saved.")
 
+        # flush Anki buffer
+        anki.flush_buffer()
+
     # Step 4: Update Anki with new pronunciations using updateNoteFields
-    if pronunciations_dict:
-        update_anki_notes(notes, FIELD_NAME, pronunciations_dict)
-    else:
-        logging.info("No new pronunciations to update.")
+    anki.flush_buffer()
 
     # Optional: Log summary of failed words
     cache.log_failed_words()
