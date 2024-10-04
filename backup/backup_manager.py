@@ -1,6 +1,7 @@
 import os
 import shutil
 from datetime import datetime, timedelta
+from config.logger import logger
 
 from config.config import BACKUP_KEEP_DAYS, CACHE_FILE, BACKUP_DIR
 
@@ -15,7 +16,7 @@ class BackupManager:
         if BACKUP_KEEP_DAYS is not None:
             value_int = int(BACKUP_KEEP_DAYS)
         else:
-            print("BACKUP_KEEP_DAYS is not set. Using 31")
+            logger.debug("BACKUP_KEEP_DAYS is not set. Using 31")
         return value_int or 31
 
     def limit_backups(self):
@@ -35,7 +36,7 @@ class BackupManager:
                 # If the file is older than `days_to_keep`, delete it
                 if now - file_mtime > timedelta(days=days_to_keep):
                     os.remove(file_path)
-                    print(f"Deleted old backup: {file_path}")
+                    logger.info(f"Deleted old backup: {file_path}")
 
     def backup_cache(self):
         # Create a timestamp for versioning the backup
@@ -50,4 +51,4 @@ class BackupManager:
         # Copy the file from the source to the backup destination
         shutil.copy2(CACHE_FILE, backup_file)
 
-        print(f"Backup successful: {backup_file}")
+        logger.info(f"Backup successful: {backup_file}")
