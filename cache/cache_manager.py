@@ -133,13 +133,31 @@ class CacheManager:
 
         return self.cache
 
+    def get_attempted_words(self):
+        return self.cache.get("attempted_words", {})
+
+    def in_attempts(self, word):
+        attempted_words = self.get_attempted_words()
+        is_attempted_word = attempted_words and word in attempted_words
+        logger.debug(f"{word} in attempted words: {is_attempted_word}")
+        return is_attempted_word
+
+    def untried(self, word):
+        untried = (
+            not self.in_pronunciations(word)
+            and not self.in_failures(word)
+            and not self.in_attempts(word)
+        )
+        logger.debug(f"{word} untried? {untried}")
+        return untried
+
     def get_failed_words(self):
         return self.cache.get("failed_words", {})
 
     def in_failures(self, word):
         failed_words = self.get_failed_words()
         is_failed_word = failed_words and word in failed_words
-        logger.info(f"{word} in failed words: {is_failed_word}")
+        logger.debug(f"{word} in failed words: {is_failed_word}")
         return is_failed_word
 
     def get_failed_word(self, word):
@@ -253,7 +271,7 @@ class CacheManager:
     def in_pronunciations(self, word):
         pronunciations = self.cache.get("pronunciations", {})
         word_in_pronunciations = word in pronunciations
-        logger.info(f"{word} in pronunciations: {word_in_pronunciations}")
+        logger.debug(f"{word} in pronunciations: {word_in_pronunciations}")
         return word_in_pronunciations
 
     def can_reattempt(self, word):

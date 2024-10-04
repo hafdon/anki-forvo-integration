@@ -2,19 +2,13 @@ import argparse
 from datetime import datetime
 import sys
 
-from anki.anki_invoker import AnkiInvoker
-from anki.anki_note_card_manager import AnkiNoteCardManager
-from anki.anki_pronunciations_manager import AnkiPronunciationsManager
+from anki.anki_note_card_manager import AnkiNoteManager
 from anki.anki_file_manager import AnkiFileManager
 from backup.backup_manager import BackupManager
 from cache.cache_manager import CacheManager
-from config.config import ANKI_CONNECT_URL, CACHE_FILE, RETRY_AFTER_DAYS
+from config.config import ANKI_CONNECT_URL, CACHE_FILE, DEFAULT_QUERY, RETRY_AFTER_DAYS
 from config.logger import logger
 from forvo.forvo_manager import ForvoManager
-
-# from fetch_forvo_pronunciations import main as forvo_main
-
-DEFAULT_QUERY = 'deck:"nouns"'
 
 
 def parse_local_args():
@@ -41,33 +35,34 @@ def parse_local_args():
 
 def main():
 
-    # print("Logging to log file.")
+    # Initialize managers
     backup = BackupManager()
+    cache_manager = CacheManager(CACHE_FILE, 500, 30)
+    forvo = ForvoManager()
+    anki_note_card_manager = AnkiNoteManager(ANKI_CONNECT_URL)
+    anki_file_manager = AnkiFileManager(ANKI_CONNECT_URL)
 
+    # Backup cache
     backup.limit_backups()
     backup.backup_cache()
 
     # Parse command-line arguments for the search query and retry configuration
     search_query, retry_after_days = parse_local_args()
-    print(search_query, retry_after_days)
+    logger.info(search_query, retry_after_days)
 
-    cache_manager = CacheManager(CACHE_FILE, 500, 30)
-
-    note_card_manager = AnkiNoteCardManager(ANKI_CONNECT_URL)
-    anki_note_card_manager = AnkiNoteCardManager(ANKI_CONNECT_URL)
-    forvo = ForvoManager()
-
+    # Reset the request count if it's after 22:00 UTC (time set by Forvo)
+    # We do this before checking the limit itself because ... logic.
     cache_manager.reset_request_count_if_new_day()
 
     ### Check request limit
     ### BAIL COMPLETELY if reached
     if cache_manager.is_request_limit():
         logger.warning(f"Stopping, request limit reached.")
-        logger.info("Request limit will be reset at 22:00 UTC")
+        logger.warning("Request limit will be reset at 22:00 UTC")
         sys.exit()
 
-    notes = note_card_manager.notes_from_query(search_query)
-    print(notes)
+    # Get the notes corresponding to our search query
+    notes = anki_note_card_manager.notes_from_query(search_query)
 
     # filter notes by those with a "Word" field.
     # Get the value of the Word field (aka the word itself)
@@ -76,7 +71,7 @@ def main():
         for note in notes
         if note.get("fields", {}).get("Word", {}.get("value"))
     ]
-    print(filtered_words)  # []'struchtúr']
+    logger.info("Filtered words:", len(filtered_words))
 
     # # Check if the word is in failed_words
     # if cache.is_failed_word(word) and not cache.can_reattempt(word):
@@ -98,107 +93,85 @@ def main():
     try:
         for word in can_attempt_words:
 
-            ### Check request limit
-            ### BAIL COMPLETELY if reached
+            # Check request limit
+            # BAIL COMPLETELY if reached
+            # (We do this again here because the request increment after every word.)
             if cache_manager.is_request_limit():
-                logger.warning(f"Stopping, request limit reached.")
+                logger.warning(f"Request limit reached. Bailing")
                 break
-            logger.info("Request limit not reached. Continuing.")
 
-            ###
+            ########################
             ### FETCH PRONUNCIATIONS
-            ###
+            ########################
 
             logger.info(f"Fetching and storing pronunciations for word: '{word}'")
             response = forvo.fetch_pronunciations(word)
-            logger.info(response)
 
             filenames = []
 
             if response is None:
                 # something went really wrong
-                logger.error("Something went wrong. Breaking.")
+                logger.error("Something went wrong. Bailing.")
                 break
             elif response["status_code"] == 400:
-                try:
-                    cache_manager.set_request_count_to_limit()  # passing with no argument sets to limit
-                    logger.warning(f"Stopping, request limit reached.")
-                    break
 
-                except Exception as e:
-                    logger.exception(e)
-                pass
+                logger.warning(f"Stopping, request limit reached.")
+                cache_manager.set_request_count_to_limit()
+                break
             elif response["status_code"] == 200 and response["data"]:
-                # We got some mp3 urls
-                # format: {"filename": filename, "url": mp3_url}
-
-                # Store the media file in Anki
-                anki_file_manager = AnkiFileManager(ANKI_CONNECT_URL)
-
+                # We succeeded in fetching some mp3 urls
                 for item in response["data"]:
-                    # May need to move where this is, depending on what counts as request
                     cache_manager.increment_request_count()
+                    # Store the media file and get the filename
                     stored_filename = anki_file_manager.store_media_file(
-                        item["filename"], item["url"]
+                        item["filename"],
+                        item["url"],  # format: {"filename": filename, "url": mp3_url}
                     )
+                    # Keep a string of the filenames for updating the anki note
                     if stored_filename:
-                        filenames.append(f"[sound:{stored_filename}]")
+                        filenames.append(
+                            f"sound:{stored_filename}"
+                        )  # (We've removed the brackets from [sound:X] to prevent auto-play on cards)
             elif response["status_code"] == 204:
                 # We received a response, but no pronunciations were available
-                try:
-                    cache_manager.increment_request_count()  # This counts, yikes!
-                    cache_manager.increment_fetch_failure(
-                        word, cache_manager.get_204_error_string()
-                    )
-                    cache_manager.set_last_attempt(word)
+                cache_manager.increment_request_count()
 
-                    # Update anki note with date of failed attempt
-                    query = f'Word:"{word}"'
-                    notes = anki_note_card_manager.notes_from_query(query)
+            ########################
+            ### Update Anki Cards
+            ########################
 
-                    for note in notes:
-                        anki_note_card_manager.update_note_field(
-                            note["noteId"],
-                            "ForvoChecked",
-                            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        )
+            query = f'Word:"{word}"'
+            notes = anki_note_card_manager.notes_from_query(query)
 
-                except Exception as e:
-                    logger.exception(e)
+            for note in notes:
 
-            ###
-            # Now that we got mp3s, and the filenames of where they were downloaded to,
-            # 1. Update the anki notes with the filenames in the ForvoPronunciations field.
-            # 2. Update the cache
-            ###
+                note_field = "ForvoPronunciations" if filenames else "ForvoChecked"
+                note_data = (
+                    " ".join(filenames)
+                    if filenames
+                    else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                )
+
+                anki_note_card_manager.update_note_field(
+                    note["noteId"], note_field, note_data
+                )
+
+            ########################
+            ### Update Cache
+            ########################
+
+            cache_manager.set_last_attempt(word)
             if filenames:
-
-                # 1. Update anki cards
-
-                query = f'Word:"{word}"'
-                notes = anki_note_card_manager.notes_from_query(query)
-
-                for note in notes:
-                    anki_note_card_manager.update_note_field(
-                        note["noteId"], "ForvoPronunciations", " ".join(filenames)
-                    )
-
-                # 2. Update cache with:
-                #    - pronunciations
-                #    - increased request attempt total
-                # 3. Clear record of failed word
                 cache_manager.set_pronunciations(word, filenames)
-                cache_manager.set_last_attempt(word)
                 if cache_manager.in_failures(word):
                     cache_manager.set_unfailed(word)
+            else:
+                cache_manager.increment_fetch_failure(
+                    word, cache_manager.get_204_error_string()
+                )
 
     except:
-        logger.error("Exception")
-
-    ### It's possible to have conflicting information, if it's in both failed_words and pronunciations
-    ### but this means something messed up earlier, and has more to do with data consistency
-
-    print(can_attempt_words)
+        logger.exception("Exception")
 
 
 if __name__ == "__main__":
