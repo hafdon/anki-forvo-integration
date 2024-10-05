@@ -1,4 +1,5 @@
 import logging
+from logging.handlers import RotatingFileHandler
 import coloredlogs
 
 # Create a logger
@@ -22,20 +23,17 @@ coloredlogs.install(
     },
 )
 
-# Create a FileHandler to write logs to a file
-file_handler = logging.FileHandler("app.log")
-file_handler.setLevel(logging.DEBUG)  # Set the level for file handler
+# Create a RotatingFileHandler
+rotating_handler = RotatingFileHandler(
+    "app.log", maxBytes=5 * 1024 * 1024, backupCount=3
+)  # 5MB per file, keep 3 backups
+rotating_handler.setLevel(logging.DEBUG)
+rotating_formatter = logging.Formatter(log_format)
+rotating_handler.setFormatter(rotating_formatter)
 
-# Define a formatter for the file handler
-file_formatter = logging.Formatter(log_format)
-file_handler.setFormatter(file_formatter)
+# Add the handler to the logger
+logger.addHandler(rotating_handler)
 
-# Add the FileHandler to the logger
-logger.addHandler(file_handler)
-
-# # Example log messages
-# logger.debug("This is a DEBUG message.")
-# logger.info("This is an INFO message.")
-# logger.warning("This is a WARNING message.")
-# logger.error("This is an ERROR message.")
-# logger.critical("This is a CRITICAL message.")
+# Example log messages
+# for i in range(100000):
+#     logger.debug(f"Debug message {i}")
