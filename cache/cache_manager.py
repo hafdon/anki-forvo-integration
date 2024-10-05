@@ -70,7 +70,7 @@ class CacheManager:
             with open(temp_file, "w", encoding="utf-8") as f:
                 json.dump(cache, f, ensure_ascii=False, indent=4)
             os.replace(temp_file, self.cache_file)
-            logger.info(f"Cache saved successfully to '{self.cache_file}'.")
+            # logger.info(f"Cache saved successfully to '{self.cache_file}'.")
         except Exception as e:
             logger.error(f"Failed to save cache to '{self.cache_file}': {e}")
             # Optionally, you might want to remove the temp file if it exists
@@ -202,8 +202,12 @@ class CacheManager:
         return False
 
     def increment_request_count(self):
-        self.cache["request_count"] = self.cache.get("request_count", 0) + 1
+        current_request_count = self.cache.get("request_count", 0)
+        # self.cache["request_count"] = self.cache.get("request_count", 0) + 1
+        incremented_request_count = current_request_count + 1
+        self.cache["request_count"] = incremented_request_count
         self.cache["last_request"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        logger.debug(f"incremented_request_count: {incremented_request_count}")
         self.save_cache(self.cache)
 
     def set_last_failed_attempt(self, word):

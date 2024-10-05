@@ -117,6 +117,7 @@ def main():
                 cache_manager.set_request_count_to_limit()
                 break
             elif response["status_code"] == 200 and response["data"]:
+                cache_manager.increment_request_count()
                 logger.info(f"Successful fetch for: {word}")
                 for item in response["data"]:
                     cache_manager.increment_request_count()
