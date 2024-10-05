@@ -110,16 +110,15 @@ def main():
             filenames = []
 
             if response is None:
-                # something went really wrong
                 logger.error("Something went wrong. Bailing.")
                 break
             elif response["status_code"] == 400:
-
-                logger.warning(f"Stopping, request limit reached.")
+                logger.warning(f"Request limit reached. Bailing.")
                 cache_manager.set_request_count_to_limit()
                 break
             elif response["status_code"] == 200 and response["data"]:
-                # We succeeded in fetching some mp3 urls
+                cache_manager.increment_request_count()
+                logger.info(f"Successful fetch for: {word}")
                 for item in response["data"]:
                     cache_manager.increment_request_count()
                     # Store the media file and get the filename
