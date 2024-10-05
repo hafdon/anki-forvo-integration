@@ -134,6 +134,7 @@ def main():
             elif response["status_code"] == 204:
                 # We received a response, but no pronunciations were available
                 cache_manager.increment_request_count()
+                logger.debug(f"{word}: 204")
 
             ########################
             ### Update Anki Cards
