@@ -4,9 +4,10 @@ from datetime import datetime, timedelta
 from config.logger import logger
 
 from config.config import BACKUP_KEEP_DAYS, CACHE_FILE, BACKUP_DIR
+from singleton import SingletonMeta
 
 
-class BackupManager:
+class BackupManager(metaclass=SingletonMeta):
 
     def __init__(self):
         pass
