@@ -53,11 +53,11 @@ A Python script that fetches pronunciations from the Forvo API, caches results t
    DAILY_REQUEST_LIMIT=500  # Adjust according to Forvo's rate limits
    ```
 
-   - **ANKI_CONNECT_URL:** URL where AnkiConnect is running (default is `http://localhost:8765`).
-   - **FORVO_API_KEY:** Your personal Forvo API key.
-   - **FORVO_LANGUAGE:** Language code for pronunciations (e.g., `en` for English).
-   - **CACHE_FILE:** Path to the cache file (default is `cache.json`).
-   - **DAILY_REQUEST_LIMIT:** Maximum number of API requests per day.
+   - **`ANKI_CONNECT_URL`:** URL where AnkiConnect is running (default is `http://localhost:8765`).
+   - **`FORVO_API_KEY`:** Your personal Forvo API key.
+   - **`FORVO_LANGUAGE`:** Language code for pronunciations (e.g., `en` for English).
+   - **`CACHE_FILE`:** Path to the cache file (default is `cache.json`).
+   - **`DAILY_REQUEST_LIMIT`:** Maximum number of API requests per day.
 
 2. **Ensure AnkiConnect is Installed and Running:**
 

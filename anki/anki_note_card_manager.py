@@ -57,8 +57,14 @@ class AnkiNoteManager:
         """Update a specific field of a note."""
         params = {"note": {"id": note_id, "fields": {field_name: new_content}}}
         response = self.invoker.invoke("updateNoteFields", params)
+
+        logger.debug(f"==> RESPONSE FROM ATTEMPTING TO UPDATE NOTE: {response}")
+
         if response.get("error"):
-            print(f"Error updating note {note_id}: {response['error']}")
+            logger.error(f"Error updating note {note_id}: {response['error']}")
+
+    def get_note_field_value(self, note, field_label="Word"):
+        return note["fields"].get(field_label, {}).get("value", "").strip()
 
     # def notes_from_card_ids(self, card_ids):
     #     if not card_ids:
@@ -94,9 +100,6 @@ class AnkiNoteManager:
     #     notes = response.get("result", [])
     #     logger.info(f"Retrieved information for {len(notes)} notes.")
     #     return notes
-
-    # def get_note_field_value(self, note, field_label="Word"):
-    #     return note["fields"].get(field_label, {}).get("value", "").strip()
 
     # def has_note_field_value(self, note, field_label="Word"):
     #     if self.get_note_field_value(note, field_label):

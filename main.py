@@ -71,7 +71,7 @@ def main():
         for note in notes
         if note.get("fields", {}).get("Word", {}.get("value"))
     ]
-    logger.info("Filtered words:", len(filtered_words))
+    logger.info(f"Filtered words: {len(filtered_words)}")
 
     # # Check if the word is in failed_words
     # if cache.is_failed_word(word) and not cache.can_reattempt(word):
@@ -90,6 +90,9 @@ def main():
         or (cache_manager.in_failures(word) and cache_manager.can_reattempt(word))
     ]
 
+    # unique values
+    can_attempt_words = list(set(can_attempt_words))
+
     try:
         for word in can_attempt_words:
 
@@ -104,7 +107,7 @@ def main():
             ### FETCH PRONUNCIATIONS
             ########################
 
-            logger.info(f"Fetching and storing pronunciations for word: '{word}'")
+            logger.debug(f"==> Attempting to fetch pronunciations for '{word}'")
             response = forvo.fetch_pronunciations(word)
 
             filenames = []
@@ -118,7 +121,7 @@ def main():
                 break
             elif response["status_code"] == 200 and response["data"]:
                 cache_manager.increment_request_count()
-                logger.info(f"Successful fetch for: {word}")
+                logger.debug(f"[200] Successful fetch for: {word}")
                 for item in response["data"]:
                     cache_manager.increment_request_count()
                     # Store the media file and get the filename
@@ -134,7 +137,7 @@ def main():
             elif response["status_code"] == 204:
                 # We received a response, but no pronunciations were available
                 cache_manager.increment_request_count()
-                logger.debug(f"{word}: 204")
+                logger.debug(f"[204] {word}")
 
             ########################
             ### Update Anki Cards
