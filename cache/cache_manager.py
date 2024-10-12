@@ -3,8 +3,10 @@ import os
 from config.logger import logger
 from datetime import datetime, time, timedelta, timezone
 
+from singleton import SingletonMeta
 
-class CacheManager:
+
+class CacheManager(metaclass=SingletonMeta):
     def __init__(self, cache_file, request_limit, retry_after_days):
         """
         Initialize the ForvoPronunciationCache instance by loading the cache.

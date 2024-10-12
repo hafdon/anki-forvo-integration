@@ -47,36 +47,45 @@ class ForvoManager:
     def encode(self, word):
         return requests.utils.quote(word)
 
+    def filename_from_item(self, word, item, index):
+        username = item.get("username", "Anonymous").replace(" ", "_")
+        gender = item.get("sex", "n").replace(" ", "_")
+        word = word.strip().replace(" ", "_")
+        filename = (
+            f"{word}__{username}_{gender}_{index}.mp3".replace("/", "_")
+            .replace(":", "_")
+            .replace(" ", "_")
+        )  # Replace any '/' to avoid path issues
+        return filename
+
+    def ensure_mp3_is_url(self, path):
+        mp3_url = path
+
+        # Check if mp3_url is already a full URL
+        if not mp3_url.startswith("http"):
+            # If it's a relative path, prepend the base URL
+            if not mp3_url.startswith("/"):
+                mp3_url = "/" + mp3_url
+            mp3_url = f"https://apifree.forvo.com{mp3_url}"
+
+        logger.info(mp3_url)
+        return mp3_url
+
     def filename_and_url_from_data(self, data, word):
 
         my_data = []
 
         if "items" in data and isinstance(data["items"], list):
-            ## see temp.json for example of data structure
+
             mp3_index = 1
             for item in data["items"]:
                 if item.get("pathmp3"):
-                    mp3_url = item["pathmp3"]
-
-                    # Check if mp3_url is already a full URL
-                    if not mp3_url.startswith("http"):
-                        # If it's a relative path, prepend the base URL
-                        if not mp3_url.startswith("/"):
-                            mp3_url = "/" + mp3_url
-                        mp3_url = f"https://apifree.forvo.com{mp3_url}"
-                        logger.info(mp3_url)
-
-                    # Generate a unique filename
-                    # dialect = item.get("dialect", "random").replace(
-                    #     " ", "_"
-                    # )  # Assuming 'dialect' field exists
-                    username = item.get("username", "Anonymous").replace(" ", "_")
-                    gender = item.get("sex", "n").replace(" ", "_")
-                    filename = f"{word}_{username}_{gender}_{mp3_index}.mp3".replace(
-                        "/", "_"
-                    )  # Replace any '/' to avoid path issues
+                    mp3_url = self.ensure_mp3_is_url(item["pathmp3"])
+                    filename = self.filename_from_item(word, item, mp3_index)
                     my_data.append({"filename": filename, "url": mp3_url})
+                    # Only increment mp3 index if we've managed to add the filename to the list
                     mp3_index += 1
+
         return my_data
 
     # This is for a single word

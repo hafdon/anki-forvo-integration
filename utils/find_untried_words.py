@@ -1,4 +1,4 @@
-from anki.anki_note_card_manager import AnkiNoteManager
+from anki.anki_note_manager import AnkiNoteManager
 from cache.cache_manager import CacheManager
 from config.config import ANKI_CONNECT_URL, CACHE_FILE
 from config.logger import logger
