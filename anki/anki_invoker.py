@@ -33,3 +33,23 @@ class AnkiInvoker:
         except ValueError as e:
             logger.error(f"Failed to parse response as JSON for action '{action}': {e}")
             return {"error": f"JSON parsing error: {str(e)}"}
+
+    def test_connection(self):
+        """Test the connection to AnkiConnect by requesting the version."""
+        payload = {"action": "version", "version": 6}
+        try:
+            response = requests.post(self.connect_url, json=payload, timeout=5)
+            response.raise_for_status()
+            result = response.json()
+            if "result" in result:
+                logger.info(f"AnkiConnect version: {result['result']}")
+                return True
+            else:
+                logger.error(f"Unexpected response structure: {result}")
+                return False
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Connection test failed: {e}")
+            return False
+        except ValueError as e:
+            logger.error(f"Failed to parse connection test response as JSON: {e}")
+            return False

@@ -1,3 +1,4 @@
+# anki_note_manager.py
 from anki.anki_invoker import AnkiInvoker
 from config.logger import logger
 
@@ -5,7 +6,17 @@ from config.logger import logger
 class AnkiNoteManager:
     def __init__(self, connect_url) -> None:
         self.invoker = AnkiInvoker(connect_url)
-        pass
+        self.ensure_connection()
+
+    def ensure_connection(self):
+        """Ensure that the connection to AnkiConnect is successful."""
+        if not self.invoker.test_connection():
+            logger.error(
+                "Failed to connect to AnkiConnect. Please ensure Anki is running and AnkiConnect is installed."
+            )
+            raise ConnectionError(
+                "Cannot connect to AnkiConnect at {}".format(self.invoker.connect_url)
+            )
 
     def note_ids_from_query(self, search_query):
         # Can't be a space in between Word:word
@@ -33,7 +44,7 @@ class AnkiNoteManager:
 
         note_ids = self.note_ids_from_query(search_query)
 
-        logger.info(f"Found {len(note_ids)} notes with query'{search_query}")
+        logger.info(f"Found {len(note_ids)} notes with query'{search_query}'")
 
         return self.notes_from_note_ids(note_ids)
 

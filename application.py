@@ -11,11 +11,22 @@ from config.logger import logger
 
 class Application:
     def __init__(self, args=None):
-        self.backup_manager = ManagerFactory.create_backup_manager()
-        self.cache_manager = ManagerFactory.create_cache_manager()
-        self.forvo_manager = ManagerFactory.create_forvo_manager()
-        self.anki_note_card_manager = ManagerFactory.create_anki_note_card_manager()
-        self.anki_file_manager = ManagerFactory.create_anki_file_manager()
+        try:
+            self.backup_manager = ManagerFactory.create_backup_manager()
+            self.cache_manager = ManagerFactory.create_cache_manager()
+            self.forvo_manager = ManagerFactory.create_forvo_manager()
+            self.anki_note_card_manager = ManagerFactory.create_anki_note_card_manager()
+            self.anki_file_manager = ManagerFactory.create_anki_file_manager()
+
+        except ConnectionError as e:
+            logger.error("Unable to establish a connection with AnkiConnect.")
+            logger.error(
+                "Please ensure that Anki is running and that the AnkiConnect add-on is installed and enabled."
+            )
+            logger.error(
+                "Refer to https://ankiweb.net/shared/info/2055492159 for installation instructions."
+            )
+            sys.exit(1)
 
         self.search_query, self.retry_after_days = self.parse_args(args)
 
