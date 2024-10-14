@@ -1,6 +1,6 @@
 # Forvo Pronunciation Fetcher for Anki
 
-A Python script that fetches pronunciations from the Forvo API, caches results to prevent redundant requests, and updates your Anki flashcards seamlessly. Designed with robust error handling to manage API rate limits and ensure data integrity.
+A Python script that fetches pronunciations from the Forvo API, caches results to prevent redundant requests, and updates your Anki flashcards. Designed with robust error handling to manage API rate limits and ensure data integrity.
 
 ## 🚀 Features
 

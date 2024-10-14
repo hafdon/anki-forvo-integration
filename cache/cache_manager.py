@@ -184,12 +184,9 @@ class CacheManager(metaclass=SingletonMeta):
             try:
                 last_attempt = datetime.strptime(last_attempt_str, "%Y-%m-%d %H:%M:%S")
                 time_since_last_attempt = datetime.now() - last_attempt
-                logger.warning(
-                    f"Successfully determined time since last attempt for word '{word}"
-                )
                 return time_since_last_attempt
             except ValueError:
-                logger.warning(
+                logger.error(
                     f"Invalid date format for word '{word}'. Proceeding to retry."
                 )
                 return None
@@ -282,7 +279,9 @@ class CacheManager(metaclass=SingletonMeta):
 
     def can_reattempt(self, word):
         time_since_last_attempt = self.get_time_since_last_attempt(word)
-        logger.info(f"last attempt was {time_since_last_attempt.days} days ago.")
+        logger.info(
+            f"Last attempt for {word} was {time_since_last_attempt.days} days ago."
+        )
         if time_since_last_attempt and time_since_last_attempt < timedelta(
             days=self.retry_after_days
         ):

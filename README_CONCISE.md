@@ -2,7 +2,7 @@
 
 ## Introduction
 
-The **Anki Forvo Pronunciation Updater** is a tool designed to fetch pronunciations from Forvo and update Anki notes based on a specified search query. It ensures that Anki flashcards are enriched with accurate pronunciations, enhancing the language learning experience.
+The **Anki Forvo Pronunciation Updater** is a tool designed to fetch pronunciations from Forvo and update Anki notes based on a specified search query.
 
 ## Features
 
@@ -15,7 +15,7 @@ The **Anki Forvo Pronunciation Updater** is a tool designed to fetch pronunciati
 
 ## Architecture Overview
 
-The system employs several design patterns, including Factory, Singleton, and Command patterns, to ensure a modular, scalable, and maintainable codebase. For a detailed architecture description, refer to the [Architecture Documentation](docs/architecture.md).
+For a detailed architecture description, refer to the [Architecture Documentation](docs/architecture.md).
 
 ## Getting Started
 
