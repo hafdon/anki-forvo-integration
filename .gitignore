@@ -166,4 +166,6 @@ cython_debug/
 # Data
 cache.json
 temp.*
-config.py
+
+# Application logs (rotating)
+app.log.*
